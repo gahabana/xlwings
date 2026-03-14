@@ -248,23 +248,43 @@ RawValueAccessor.register("raw")
 class ValueAccessor(Accessor):
     @staticmethod
     def reader(options):
+        import xlwings as xw
+
+        use_fast = xw.USE_FAST_CONVERSION and np is not None
+        if use_fast:
+            from .fast import FastTransposeStage
+
+            transpose_stage = FastTransposeStage()
+        else:
+            transpose_stage = TransposeStage()
+
         return (
             BaseAccessor.reader(options)
             .append_stage(ReadValueFromRangeStage(options))
             .append_stage(Ensure2DStage())
             .append_stage(CleanDataFromReadStage(options))
-            .append_stage(TransposeStage(), only_if=options.get("transpose", False))
+            .append_stage(transpose_stage, only_if=options.get("transpose", False))
             .append_stage(AdjustDimensionsStage(options))
         )
 
     @staticmethod
     def writer(options):
+        import xlwings as xw
+
+        use_fast = xw.USE_FAST_CONVERSION and np is not None
+        if use_fast:
+            from .fast import FastTransposeStage
+
+            transpose_stage = FastTransposeStage()
+        else:
+            transpose_stage = TransposeStage()
+
         return (
             Pipeline()
             .prepend_stage(FormatStage(options))
             .prepend_stage(WriteValueToRangeStage(options))
             .prepend_stage(CleanDataForWriteStage(options))
-            .prepend_stage(TransposeStage(), only_if=options.get("transpose", False))
+            .prepend_stage(transpose_stage, only_if=options.get("transpose", False))
             .prepend_stage(Ensure2DStage())
         )
 
