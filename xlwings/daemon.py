@@ -304,6 +304,8 @@ def parse_args(argv=None):
                               help="Semicolon-delimited Python paths")
     start_parser.add_argument("--app", default="",
                               help="Excel application path")
+    start_parser.add_argument("--health-check-interval", type=float, default=2.5,
+                              help="Health-check interval in seconds (0 to disable)")
 
     return parser.parse_args(argv)
 
@@ -324,7 +326,7 @@ def main(argv=None):
             workbook_name=args.workbook,
             pythonpath=args.pythonpath,
             app_path=args.app,
-            health_check_interval=2.5,
+            health_check_interval=args.health_check_interval,
         )
 
         # Handle SIGTERM gracefully
