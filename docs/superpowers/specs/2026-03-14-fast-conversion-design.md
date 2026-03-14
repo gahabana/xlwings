@@ -123,7 +123,7 @@ Replaces `df[col].apply(xlserial_to_datetime)` in `pandas_conv.py:20-23`.
 def fast_xlserial_to_datetime_series(series):
     numeric = pd.to_numeric(series, errors='coerce')
     timestamps = ((numeric - 25569) * 86400).round(3)  # match precision of utils.xlserial_to_datetime
-    return pd.to_datetime(timestamps, unit='s', utc=True).dt.tz_localize(None)
+    return pd.to_datetime(timestamps, unit='s', utc=True).dt.tz_convert(None)
 ```
 
 Fully vectorized — no per-element function calls. Non-numeric values are preserved as NaT. The `.round(3)` matches the existing `round(..., 3)` in `xlserial_to_datetime` to avoid sub-millisecond precision discrepancies in equivalence tests.
