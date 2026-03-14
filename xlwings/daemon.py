@@ -7,9 +7,12 @@ Eliminates 2-3s interpreter startup latency by keeping Python warm between calls
 """
 
 import fcntl
+import importlib
 import logging
 import os
 import socket
+import sys
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,7 @@ class DaemonServer:
         self._running = False
         self._server_socket = None
         self._pid_file_fd = None
+        self._loaded_modules = {}  # module_name -> True (tracks which modules to reload)
 
     def serve(self):
         """Main loop: bind socket, accept connections, dispatch commands."""
@@ -97,8 +101,55 @@ class DaemonServer:
             return f"ERROR: Unknown command: {command_line}"
 
     def _handle_exec(self, python_code):
-        """Execute Python code from EXEC command. Placeholder — Task 2 implements this."""
-        return "ERROR: EXEC not yet implemented"
+        """Execute Python code, reloading user modules first."""
+        try:
+            original_argv = sys.argv
+            sys.argv = [
+                "",
+                f"--wb={self.workbook_name}",
+                "--from_xl=1",
+                f"--app={self.app_path}",
+            ]
+
+            if self.pythonpath:
+                for path_entry in self.pythonpath.split(";"):
+                    path_entry = path_entry.strip()
+                    if path_entry and path_entry not in sys.path:
+                        sys.path.insert(0, path_entry)
+
+            # Remove previously-imported user modules so import picks up changes
+            for module_name in list(self._loaded_modules):
+                if module_name in sys.modules:
+                    module = sys.modules[module_name]
+                    # Delete cached .pyc so the fresh import reads the .py source
+                    if hasattr(module, "__file__") and module.__file__:
+                        try:
+                            pyc_path = importlib.util.cache_from_source(
+                                module.__file__
+                            )
+                            if os.path.exists(pyc_path):
+                                os.unlink(pyc_path)
+                        except (NotImplementedError, ValueError):
+                            pass
+                    del sys.modules[module_name]
+            importlib.invalidate_caches()
+
+            exec_globals = {"__builtins__": __builtins__}
+            exec(python_code, exec_globals)
+
+            # Track newly-imported modules for future reloads
+            for token in python_code.replace(";", "\n").split("\n"):
+                token = token.strip()
+                if token.startswith("import "):
+                    module_name = token.split()[1].split(".")[0]
+                    if module_name in sys.modules:
+                        self._loaded_modules[module_name] = True
+
+            return "OK"
+        except Exception:
+            return f"ERROR: {traceback.format_exc()}"
+        finally:
+            sys.argv = original_argv
 
     def _write_pid_file(self):
         """Write PID file with fcntl.flock() for race-condition prevention."""
