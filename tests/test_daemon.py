@@ -393,3 +393,25 @@ class TestHealthCheck(unittest.TestCase):
             server_thread.start()
             server_thread.join(timeout=3)
             self.assertFalse(server_thread.is_alive())
+
+
+class TestDaemonCLI(unittest.TestCase):
+    """Test the daemon's command-line interface."""
+
+    def test_parse_start_args(self):
+        from xlwings.daemon import parse_args
+
+        args = parse_args([
+            "start",
+            "--workbook", "PWandRC5.xlsm",
+            "--socket", "/tmp/xlwings-daemon-abc123.sock",
+            "--pidfile", "/tmp/xlwings-daemon-abc123.pid",
+            "--pythonpath", "/Users/zh/projects/pwr",
+            "--app", "/Applications/Microsoft Excel.app/Contents/MacOS",
+        ])
+        self.assertEqual(args.command, "start")
+        self.assertEqual(args.workbook, "PWandRC5.xlsm")
+        self.assertEqual(args.socket, "/tmp/xlwings-daemon-abc123.sock")
+        self.assertEqual(args.pidfile, "/tmp/xlwings-daemon-abc123.pid")
+        self.assertEqual(args.pythonpath, "/Users/zh/projects/pwr")
+        self.assertEqual(args.app, "/Applications/Microsoft Excel.app/Contents/MacOS")

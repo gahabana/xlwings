@@ -6,6 +6,7 @@ Listens on a Unix domain socket and executes commands sent from Excel via VBA/Ap
 Eliminates 2-3s interpreter startup latency by keeping Python warm between calls.
 """
 
+import argparse
 import fcntl
 import importlib
 import logging
@@ -283,3 +284,58 @@ def check_stale_daemon(socket_path, pid_file_path):
         os.unlink(status_file_path)
 
     return False
+
+
+def parse_args(argv=None):
+    """Parse daemon command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="xlwings daemon — persistent Python process for fast RunPython"
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    start_parser = subparsers.add_parser("start", help="Start the daemon")
+    start_parser.add_argument("--workbook", required=True,
+                              help="Name of the Excel workbook")
+    start_parser.add_argument("--socket", required=True,
+                              help="Path to Unix domain socket")
+    start_parser.add_argument("--pidfile", required=True,
+                              help="Path to PID file")
+    start_parser.add_argument("--pythonpath", default="",
+                              help="Semicolon-delimited Python paths")
+    start_parser.add_argument("--app", default="",
+                              help="Excel application path")
+
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    """CLI entry point for `python -m xlwings.daemon`."""
+    args = parse_args(argv)
+
+    if args.command == "start":
+        # Check for existing daemon
+        if check_stale_daemon(args.socket, args.pidfile):
+            logger.info("Daemon already running for %s — exiting", args.workbook)
+            return
+
+        server = DaemonServer(
+            socket_path=args.socket,
+            pid_file_path=args.pidfile,
+            workbook_name=args.workbook,
+            pythonpath=args.pythonpath,
+            app_path=args.app,
+            health_check_interval=2.5,
+        )
+
+        # Handle SIGTERM gracefully
+        signal.signal(signal.SIGTERM, lambda signum, frame: server.shutdown())
+
+        logger.info("Starting daemon for workbook: %s", args.workbook)
+        server.serve()
+    else:
+        parse_args(["--help"])
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    main()
