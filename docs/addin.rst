@@ -64,6 +64,11 @@ When you install the add-in for the first time, it will get auto-configured and 
 * ``Restart UDF Server``: This restarts the UDF Server/Python interpreter.
 * ``Show Console``: Check the box in the ribbon or set the config to ``TRUE`` if you want the command prompt to pop up. This currently only works on Windows.
 * ``ADD_WORKBOOK_TO_PYTHONPATH``: Uncheck this box to not automatically add the directory of your workbook to the PYTHONPATH. This can be helpful if you experience issues with OneDrive/SharePoint: uncheck this box and provide the path where your source file is manually via the PYTHONPATH setting.
+* ``DAEMON`` (macOS only): Set to ``1`` or ``TRUE`` to enable the persistent Python daemon. When enabled, a background
+  Python process starts when the workbook opens and stays running, eliminating the 2-3 second interpreter startup on each
+  ``RunPython`` call. Subsequent calls execute in ~50-100ms. The daemon automatically shuts down when the workbook is closed
+  or Excel quits. If the daemon is unreachable, xlwings falls back to the normal process spawn. To use the daemon, add
+  ``DaemonAutoStart`` to your workbook's ``Workbook_Open`` event and ``DaemonAutoStop`` to ``Workbook_BeforeClose``.
 
 Anaconda/Miniconda
 ******************
@@ -135,6 +140,7 @@ The format is as follows (currently the keys are required to be all caps) - note
     "ONEDRIVE_COMMERCIAL_MAC",""
     "SHAREPOINT_WIN",""
     "SHAREPOINT_MAC",""
+    "DAEMON",""
 
 .. note::
     The ``ONEDRIVE_WIN/_MAC`` setting has to be edited directly in the file, there is currently no possibility to edit it via the ribbon. Usually, it is only required if you are either on macOS or if your environment variables on Windows are not correctly set or if you have a private and corporate location and don't want to go with the default one. ``ONEDRIVE_WIN/_MAC`` has to point to the root folder of your local OneDrive folder.

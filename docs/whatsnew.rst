@@ -1,6 +1,11 @@
 Changelog
 =========
 
+v0.33.22 (unreleased)
+---------------------
+
+* :bdg-info:`Enhancement` Added persistent Python daemon for macOS (``DAEMON=1`` config setting). Eliminates 2-3 second interpreter startup latency on each ``RunPython`` call by keeping a background Python process running. Subsequent calls execute in ~50-100ms. The daemon automatically starts on workbook open and stops on workbook close, with automatic fallback to normal process spawn if unreachable.
+
 v0.33.21 (Mar 9, 2026)
 ----------------------
 
