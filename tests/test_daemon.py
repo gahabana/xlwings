@@ -30,6 +30,9 @@ class TestDaemonProtocol(unittest.TestCase):
         for path in (self.socket_path, self.pid_file_path):
             if os.path.exists(path):
                 os.unlink(path)
+        status_path = self.socket_path.replace(".sock", ".status")
+        if os.path.exists(status_path):
+            os.unlink(status_path)
 
     def _send_command(self, command):
         """Helper: connect to daemon socket, send command, return response."""
@@ -183,6 +186,33 @@ class TestDaemonProtocol(unittest.TestCase):
         server_thread.join(timeout=3)
 
         shutil.rmtree(module_dir)
+
+    def test_status_file_written_on_ready(self):
+        """Daemon should write a .status file with 'ready' when accepting connections."""
+        from xlwings.daemon import DaemonServer
+
+        status_path = self.socket_path.replace(".sock", ".status")
+
+        server = DaemonServer(
+            socket_path=self.socket_path,
+            pid_file_path=self.pid_file_path,
+            workbook_name="Test.xlsm",
+            pythonpath="",
+            app_path="/Applications/Microsoft Excel.app",
+        )
+        server_thread = threading.Thread(target=server.serve, daemon=True)
+        server_thread.start()
+        time.sleep(0.3)
+
+        self.assertTrue(os.path.exists(status_path))
+        with open(status_path) as f:
+            self.assertEqual(f.read().strip(), "ready")
+
+        server.shutdown()
+        server_thread.join(timeout=3)
+
+        # Status file should be cleaned up
+        self.assertFalse(os.path.exists(status_path))
 
     def test_exec_syntax_error_returns_error_but_daemon_survives(self):
         """A syntax error in user code should return ERROR but not kill the daemon."""

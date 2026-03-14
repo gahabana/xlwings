@@ -64,6 +64,7 @@ class DaemonServer:
         self.pythonpath = pythonpath
         self.app_path = app_path
         self.health_check_interval = health_check_interval
+        self.status_file_path = self.socket_path.replace(".sock", ".status")
         self._running = False
         self._server_socket = None
         self._pid_file_fd = None
@@ -83,6 +84,10 @@ class DaemonServer:
         self._server_socket.settimeout(1.0)
 
         logger.info("Daemon listening on %s", self.socket_path)
+
+        # Signal readiness
+        with open(self.status_file_path, "w") as f:
+            f.write("ready")
 
         # Start health-check thread if interval is set
         if self.health_check_interval > 0:
@@ -208,6 +213,8 @@ class DaemonServer:
             self._pid_file_fd.close()
         if os.path.exists(self.pid_file_path):
             os.unlink(self.pid_file_path)
+        if os.path.exists(self.status_file_path):
+            os.unlink(self.status_file_path)
 
     def _health_check_loop(self):
         """Periodically check that Excel is running and workbook is open."""
