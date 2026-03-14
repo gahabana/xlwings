@@ -273,17 +273,19 @@ class ValueAccessor(Accessor):
 
         use_fast = xw.USE_FAST_CONVERSION and np is not None
         if use_fast:
-            from .fast import FastTransposeStage
+            from .fast import FastCleanDataForWriteStage, FastTransposeStage
 
             transpose_stage = FastTransposeStage()
+            clean_write_stage = FastCleanDataForWriteStage(options)
         else:
             transpose_stage = TransposeStage()
+            clean_write_stage = CleanDataForWriteStage(options)
 
         return (
             Pipeline()
             .prepend_stage(FormatStage(options))
             .prepend_stage(WriteValueToRangeStage(options))
-            .prepend_stage(CleanDataForWriteStage(options))
+            .prepend_stage(clean_write_stage)
             .prepend_stage(transpose_stage, only_if=options.get("transpose", False))
             .prepend_stage(Ensure2DStage())
         )
