@@ -109,6 +109,21 @@ Public Function RunPython(PythonCommand As String)
         End If
     End If
 
+    ' Check for daemon mode (Mac only)
+    #If Mac Then
+        Dim useDaemon As String
+        useDaemon = GetConfig("DAEMON", "0")
+
+        If useDaemon = "1" Or UCase(useDaemon) = "TRUE" Then
+            ' Launch daemon if not already running (idempotent — daemon checks for existing)
+            LaunchDaemon interpreter, PYTHONPATH
+
+            ' Route to daemon execution path (passes PYTHONPATH for fallback to normal ExecuteMac)
+            ExecuteMacDaemon PythonCommand, interpreter, PYTHONPATH
+            Exit Function
+        End If
+    #End If
+
     ' Call Python platform-dependent
     #If Mac Then
         Application.StatusBar = "Running..."  ' Non-blocking way of giving feedback that something is happening
@@ -186,6 +201,96 @@ Sub ExecuteMac(PythonCommand As String, PYTHON_MAC As String, Optional PYTHONPAT
 
 AppleScriptErrorHandler:
     MsgBox "To enable RunPython, please run 'xlwings runpython install' in a terminal once and try again.", vbCritical
+    #End If
+End Sub
+
+Function GetDaemonSocketPath(WorkbookFullName As String) As String
+    ' Generate a deterministic socket path from the workbook's full path.
+    ' Uses a simple hash to avoid path-length issues with $TMPDIR.
+    Dim hashValue As Long
+    Dim i As Integer
+    hashValue = 0
+    For i = 1 To Len(WorkbookFullName)
+        hashValue = ((hashValue * 31) + Asc(Mid$(WorkbookFullName, i, 1))) And &H7FFFFFFF
+    Next i
+    GetDaemonSocketPath = Environ("TMPDIR") & "xlwings-daemon-" & CStr(hashValue) & ".sock"
+End Function
+
+Function GetDaemonPidFilePath(WorkbookFullName As String) As String
+    Dim hashValue As Long
+    Dim i As Integer
+    hashValue = 0
+    For i = 1 To Len(WorkbookFullName)
+        hashValue = ((hashValue * 31) + Asc(Mid$(WorkbookFullName, i, 1))) And &H7FFFFFFF
+    Next i
+    GetDaemonPidFilePath = Environ("TMPDIR") & "xlwings-daemon-" & CStr(hashValue) & ".pid"
+End Function
+
+Sub LaunchDaemon(interpreter As String, PYTHONPATH As String)
+    ' Launch the daemon process in background for the active workbook.
+    ' Called from RunPython on first invocation when DAEMON=1.
+    #If Mac Then
+    Dim SocketPath As String, PidFilePath As String
+    Dim ParameterString As String, AppPath As String
+
+    SocketPath = GetDaemonSocketPath(ActiveWorkbook.FullName)
+    PidFilePath = GetDaemonPidFilePath(ActiveWorkbook.FullName)
+    AppPath = Left(Application.Path, Len(Application.Path) - 4)
+
+    ParameterString = interpreter
+    ParameterString = ParameterString + "|" + ActiveWorkbook.Name
+    ParameterString = ParameterString + "|" + SocketPath
+    ParameterString = ParameterString + "|" + PidFilePath
+    ParameterString = ParameterString + "|" + PYTHONPATH
+    ParameterString = ParameterString + "|" + AppPath
+
+    On Error Resume Next
+        AppleScriptTask "xlwings-" & XLWINGS_VERSION & ".applescript", "DaemonLaunchHandler", ParameterString
+    On Error GoTo 0
+    #End If
+End Sub
+
+Sub ExecuteMacDaemon(PythonCommand As String, interpreter As String, PYTHONPATH As String)
+    ' Execute a Python command via the running daemon.
+    ' Falls back to normal ExecuteMac if daemon is unreachable after timeout.
+    #If Mac Then
+    Dim SocketPath As String, ParameterString As String
+    Dim ExecResult As String
+
+    SocketPath = GetDaemonSocketPath(ActiveWorkbook.FullName)
+
+    ParameterString = interpreter
+    ParameterString = ParameterString + "|" + SocketPath
+    ParameterString = ParameterString + "|" + PythonCommand
+    ParameterString = ParameterString + "|10"  ' 10 second timeout
+
+    On Error GoTo DaemonExecFallback
+        ExecResult = AppleScriptTask("xlwings-" & XLWINGS_VERSION & ".applescript", "DaemonExecHandler", ParameterString)
+    On Error GoTo 0
+
+    ' Check if daemon_client returned a timeout error — fall back to normal exec
+    If Left$(ExecResult, 14) = "ERROR: Timeout" Then
+        GoTo DaemonExecFallback
+    End If
+
+    ' Check result for Python errors
+    If Left$(ExecResult, 6) = "ERROR:" Then
+        ' Write error to log file and show via standard ShowError
+        Dim LOG_FILE As String
+        LOG_FILE = Environ("HOME") + "/xlwings.log"
+        Dim f As Integer
+        f = FreeFile
+        Open LOG_FILE For Output As #f
+        Print #f, Mid$(ExecResult, 8)
+        Close #f
+        ShowError (LOG_FILE)
+    End If
+    Exit Sub
+
+DaemonExecFallback:
+    ' Daemon unreachable — fall back to normal process spawn
+    On Error GoTo 0
+    ExecuteMac PythonCommand, interpreter, PYTHONPATH
     #End If
 End Sub
 
