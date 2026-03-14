@@ -12,10 +12,38 @@ import logging
 import os
 import signal
 import socket
+import subprocess
 import sys
+import threading
+import time
 import traceback
 
 logger = logging.getLogger(__name__)
+
+
+def is_excel_running():
+    """Check if Microsoft Excel process is running (macOS)."""
+    try:
+        subprocess.check_output(["pgrep", "-x", "Microsoft Excel"],
+                                stderr=subprocess.DEVNULL)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def is_workbook_open(workbook_name):
+    """Check if a specific workbook is open in Excel (macOS)."""
+    try:
+        result = subprocess.check_output(
+            ["osascript", "-e",
+             'tell application "Microsoft Excel" to get name of every workbook'],
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        open_workbooks = result.decode().strip().split(", ")
+        return workbook_name in open_workbooks
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
 
 
 class DaemonServer:
@@ -28,12 +56,14 @@ class DaemonServer:
         workbook_name,
         pythonpath,
         app_path,
+        health_check_interval=0,
     ):
         self.socket_path = socket_path
         self.pid_file_path = pid_file_path
         self.workbook_name = workbook_name
         self.pythonpath = pythonpath
         self.app_path = app_path
+        self.health_check_interval = health_check_interval
         self._running = False
         self._server_socket = None
         self._pid_file_fd = None
@@ -53,6 +83,13 @@ class DaemonServer:
         self._server_socket.settimeout(1.0)
 
         logger.info("Daemon listening on %s", self.socket_path)
+
+        # Start health-check thread if interval is set
+        if self.health_check_interval > 0:
+            health_thread = threading.Thread(
+                target=self._health_check_loop, daemon=True
+            )
+            health_thread.start()
 
         while self._running:
             try:
@@ -171,6 +208,20 @@ class DaemonServer:
             self._pid_file_fd.close()
         if os.path.exists(self.pid_file_path):
             os.unlink(self.pid_file_path)
+
+    def _health_check_loop(self):
+        """Periodically check that Excel is running and workbook is open."""
+        while self._running:
+            if not is_excel_running():
+                logger.info("Excel process not found — shutting down daemon")
+                self.shutdown()
+                return
+            if not is_workbook_open(self.workbook_name):
+                logger.info("Workbook %s no longer open — shutting down daemon",
+                            self.workbook_name)
+                self.shutdown()
+                return
+            time.sleep(self.health_check_interval)
 
     def shutdown(self):
         """Signal the server to stop (called from health-check thread or signal handler)."""

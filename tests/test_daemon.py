@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 
 class TestDaemonProtocol(unittest.TestCase):
@@ -302,3 +303,63 @@ class TestDaemonPidManagement(unittest.TestCase):
 
         server.shutdown()
         server_thread.join(timeout=3)
+
+
+class TestHealthCheck(unittest.TestCase):
+    """Test the background health-check thread that monitors Excel."""
+
+    def setUp(self):
+        self.socket_path = os.path.join(
+            tempfile.gettempdir(),
+            f"xlwings-test-hc-{os.getpid()}.sock",
+        )
+        self.pid_file_path = os.path.join(
+            tempfile.gettempdir(),
+            f"xlwings-test-hc-{os.getpid()}.pid",
+        )
+        for path in (self.socket_path, self.pid_file_path):
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def tearDown(self):
+        for path in (self.socket_path, self.pid_file_path):
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_daemon_shuts_down_when_excel_gone(self):
+        from xlwings.daemon import DaemonServer
+
+        server = DaemonServer(
+            socket_path=self.socket_path,
+            pid_file_path=self.pid_file_path,
+            workbook_name="Test.xlsm",
+            pythonpath="",
+            app_path="/Applications/Microsoft Excel.app",
+            health_check_interval=0.3,
+        )
+
+        with patch("xlwings.daemon.is_excel_running", return_value=False), \
+             patch("xlwings.daemon.is_workbook_open", return_value=True):
+            server_thread = threading.Thread(target=server.serve, daemon=True)
+            server_thread.start()
+            server_thread.join(timeout=3)
+            self.assertFalse(server_thread.is_alive())
+
+    def test_daemon_shuts_down_when_workbook_closed(self):
+        from xlwings.daemon import DaemonServer
+
+        server = DaemonServer(
+            socket_path=self.socket_path,
+            pid_file_path=self.pid_file_path,
+            workbook_name="Test.xlsm",
+            pythonpath="",
+            app_path="/Applications/Microsoft Excel.app",
+            health_check_interval=0.3,
+        )
+
+        with patch("xlwings.daemon.is_excel_running", return_value=True), \
+             patch("xlwings.daemon.is_workbook_open", return_value=False):
+            server_thread = threading.Thread(target=server.serve, daemon=True)
+            server_thread.start()
+            server_thread.join(timeout=3)
+            self.assertFalse(server_thread.is_alive())
