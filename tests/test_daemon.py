@@ -207,3 +207,98 @@ class TestDaemonProtocol(unittest.TestCase):
 
         self._send_command("SHUTDOWN")
         server_thread.join(timeout=3)
+
+
+class TestDaemonPidManagement(unittest.TestCase):
+    """Test PID file locking and stale daemon detection."""
+
+    def setUp(self):
+        self.socket_path = os.path.join(
+            tempfile.gettempdir(),
+            f"xlwings-test-pid-{os.getpid()}.sock",
+        )
+        self.pid_file_path = os.path.join(
+            tempfile.gettempdir(),
+            f"xlwings-test-pid-{os.getpid()}.pid",
+        )
+        for path in (self.socket_path, self.pid_file_path):
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def tearDown(self):
+        for path in (self.socket_path, self.pid_file_path):
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_pid_file_created_on_start(self):
+        from xlwings.daemon import DaemonServer
+
+        server = DaemonServer(
+            socket_path=self.socket_path,
+            pid_file_path=self.pid_file_path,
+            workbook_name="Test.xlsm",
+            pythonpath="",
+            app_path="/Applications/Microsoft Excel.app",
+        )
+        server_thread = threading.Thread(target=server.serve, daemon=True)
+        server_thread.start()
+        time.sleep(0.2)
+
+        self.assertTrue(os.path.exists(self.pid_file_path))
+        with open(self.pid_file_path) as f:
+            pid_content = f.read().strip()
+        self.assertEqual(pid_content, str(os.getpid()))
+
+        server.shutdown()
+        server_thread.join(timeout=3)
+
+    def test_pid_file_removed_on_shutdown(self):
+        from xlwings.daemon import DaemonServer
+
+        server = DaemonServer(
+            socket_path=self.socket_path,
+            pid_file_path=self.pid_file_path,
+            workbook_name="Test.xlsm",
+            pythonpath="",
+            app_path="/Applications/Microsoft Excel.app",
+        )
+        server_thread = threading.Thread(target=server.serve, daemon=True)
+        server_thread.start()
+        time.sleep(0.2)
+
+        server.shutdown()
+        server_thread.join(timeout=3)
+
+        self.assertFalse(os.path.exists(self.pid_file_path))
+        self.assertFalse(os.path.exists(self.socket_path))
+
+    def test_check_and_cleanup_stale_daemon(self):
+        """check_stale_daemon should remove PID file for a dead process."""
+        from xlwings.daemon import check_stale_daemon
+
+        with open(self.pid_file_path, "w") as f:
+            f.write("999999999")
+
+        is_alive = check_stale_daemon(self.socket_path, self.pid_file_path)
+        self.assertFalse(is_alive)
+
+    def test_check_stale_daemon_with_alive_daemon(self):
+        """check_stale_daemon should return True if daemon responds to PING."""
+        from xlwings.daemon import DaemonServer, check_stale_daemon
+
+        server = DaemonServer(
+            socket_path=self.socket_path,
+            pid_file_path=self.pid_file_path,
+            workbook_name="Test.xlsm",
+            pythonpath="",
+            app_path="/Applications/Microsoft Excel.app",
+        )
+        server_thread = threading.Thread(target=server.serve, daemon=True)
+        server_thread.start()
+        time.sleep(0.2)
+
+        is_alive = check_stale_daemon(self.socket_path, self.pid_file_path)
+        self.assertTrue(is_alive)
+
+        server.shutdown()
+        server_thread.join(timeout=3)

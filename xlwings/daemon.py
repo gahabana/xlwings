@@ -10,6 +10,7 @@ import fcntl
 import importlib
 import logging
 import os
+import signal
 import socket
 import sys
 import traceback
@@ -174,3 +175,53 @@ class DaemonServer:
     def shutdown(self):
         """Signal the server to stop (called from health-check thread or signal handler)."""
         self._running = False
+
+
+def check_stale_daemon(socket_path, pid_file_path):
+    """Check if an existing daemon is alive. Returns True if alive, False if stale/dead.
+
+    If a stale daemon is detected (PID file exists but process is dead or
+    socket doesn't respond to PING), cleans up the stale PID/socket files.
+    """
+    if not os.path.exists(socket_path):
+        if os.path.exists(pid_file_path):
+            os.unlink(pid_file_path)
+        return False
+
+    # Try PING via socket
+    try:
+        client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client_socket.settimeout(2)
+        client_socket.connect(socket_path)
+        client_socket.sendall(b"PING\n")
+        response = b""
+        while True:
+            chunk = client_socket.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+        client_socket.close()
+        if response.decode().strip() == "PONG":
+            return True
+    except (ConnectionRefusedError, OSError, socket.timeout):
+        pass
+
+    # Daemon is dead — try to kill stale process and clean up
+    if os.path.exists(pid_file_path):
+        try:
+            with open(pid_file_path) as f:
+                stale_pid = int(f.read().strip())
+            os.kill(stale_pid, signal.SIGTERM)
+        except (ProcessLookupError, ValueError, PermissionError):
+            pass
+        os.unlink(pid_file_path)
+
+    if os.path.exists(socket_path):
+        os.unlink(socket_path)
+
+    # Clean up stale status file too
+    status_file_path = socket_path.replace(".sock", ".status")
+    if os.path.exists(status_file_path):
+        os.unlink(status_file_path)
+
+    return False
