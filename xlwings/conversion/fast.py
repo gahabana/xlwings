@@ -51,6 +51,28 @@ def _fast_prepare_xl_data(data, engine_prepare_fn, options):
     return arr.tolist()
 
 
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
+
+def fast_xlserial_to_datetime_series(series):
+    """
+    Vectorized replacement for df[col].apply(xlserial_to_datetime).
+
+    Converts a pandas Series of Excel date serials to datetime objects.
+    Matches the precision of utils.xlserial_to_datetime by rounding
+    timestamps to 3 decimal places.
+
+    Non-numeric values become NaT.
+    """
+    numeric = pd.to_numeric(series, errors="coerce")
+    timestamps = ((numeric - 25569) * 86400).round(3)
+    result = pd.to_datetime(timestamps, unit="s", utc=True)
+    return result.dt.tz_convert(None)
+
+
 class FastCleanDataForWriteStage:
     def __init__(self, options):
         self.options = options

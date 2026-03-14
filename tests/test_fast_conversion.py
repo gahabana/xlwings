@@ -399,3 +399,70 @@ class TestFastCleanValueData:
             empty_sentinels=("", None),
         )
         assert result == [["a"], ["EMPTY"], ["EMPTY"]]
+
+
+@pytest.mark.skipif(pd is None, reason="pandas not installed")
+class TestFastXlserialToDatetimeSeries:
+    def test_known_date_44197(self):
+        """44197.0 = 2021-01-01"""
+        from xlwings.conversion.fast import fast_xlserial_to_datetime_series
+
+        series = pd.Series([44197.0])
+        result = fast_xlserial_to_datetime_series(series)
+        assert result.iloc[0] == dt.datetime(2021, 1, 1)
+
+    def test_known_date_serial_1(self):
+        """Serial 1 = 1900-01-01 (in xlserial_to_datetime's convention)"""
+        from xlwings.conversion.fast import fast_xlserial_to_datetime_series
+        from xlwings.utils import xlserial_to_datetime
+
+        series = pd.Series([1.0])
+        result = fast_xlserial_to_datetime_series(series)
+        expected = xlserial_to_datetime(1.0)
+        assert result.iloc[0] == expected
+
+    def test_known_date_serial_60(self):
+        """Serial 60 — Excel's fake 1900-02-29 leap year bug."""
+        from xlwings.conversion.fast import fast_xlserial_to_datetime_series
+        from xlwings.utils import xlserial_to_datetime
+
+        series = pd.Series([60.0])
+        result = fast_xlserial_to_datetime_series(series)
+        expected = xlserial_to_datetime(60.0)
+        assert result.iloc[0] == expected
+
+    def test_multiple_dates(self):
+        from xlwings.conversion.fast import fast_xlserial_to_datetime_series
+        from xlwings.utils import xlserial_to_datetime
+
+        serials = [44197.0, 44562.0, 44927.0]
+        series = pd.Series(serials)
+        result = fast_xlserial_to_datetime_series(series)
+        for i, serial in enumerate(serials):
+            assert result.iloc[i] == xlserial_to_datetime(serial)
+
+    def test_non_numeric_becomes_nat(self):
+        from xlwings.conversion.fast import fast_xlserial_to_datetime_series
+
+        series = pd.Series([44197.0, "not a date", None])
+        result = fast_xlserial_to_datetime_series(series)
+        assert result.iloc[0] == dt.datetime(2021, 1, 1)
+        assert pd.isna(result.iloc[1])
+        assert pd.isna(result.iloc[2])
+
+    def test_equivalence_with_apply(self):
+        """Vectorized version must match df.apply(xlserial_to_datetime) exactly."""
+        from xlwings.conversion.fast import fast_xlserial_to_datetime_series
+        from xlwings.utils import xlserial_to_datetime
+
+        serials = [1.0, 60.0, 44197.0, 44562.0, 44927.5, 43831.75]
+        series = pd.Series(serials)
+
+        expected = series.apply(xlserial_to_datetime)
+        result = fast_xlserial_to_datetime_series(series)
+
+        for i in range(len(serials)):
+            assert result.iloc[i] == expected.iloc[i], (
+                f"Mismatch at index {i}: serial={serials[i]}, "
+                f"fast={result.iloc[i]}, apply={expected.iloc[i]}"
+            )

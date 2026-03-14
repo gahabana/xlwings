@@ -15,12 +15,28 @@ if pd:
             parse_dates = [0]
         elif not isinstance(parse_dates, list):
             parse_dates = [parse_dates]
+
+        import xlwings as xw
+
+        use_fast = xw.USE_FAST_CONVERSION
+        if use_fast:
+            try:
+                from .fast import fast_xlserial_to_datetime_series
+            except ImportError:
+                use_fast = False
+
         for col in parse_dates:
             if isinstance(col, str):
-                df[col] = df[col].apply(xlserial_to_datetime)
+                if use_fast:
+                    df[col] = fast_xlserial_to_datetime_series(df[col])
+                else:
+                    df[col] = df[col].apply(xlserial_to_datetime)
             else:
                 col_name = df.columns[col]
-                df[col_name] = df.iloc[:, col].apply(xlserial_to_datetime)
+                if use_fast:
+                    df[col_name] = fast_xlserial_to_datetime_series(df.iloc[:, col])
+                else:
+                    df[col_name] = df.iloc[:, col].apply(xlserial_to_datetime)
         return df
 
     def write_value(cls, value, options):
