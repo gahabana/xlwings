@@ -119,6 +119,9 @@ if "excel" in [engine.name for engine in engines]:
     # xw.engines["engine_name"].activate() which might be useful for testing purposes.
     engines.active = engines["excel"]
 
+# Fast conversion toggle
+USE_FAST_CONVERSION = os.environ.get("XLWINGS_FAST", "1") != "0"
+
 # UDFs
 on_server = os.environ.get("XLWINGS_ON_SERVER") == "true"
 
