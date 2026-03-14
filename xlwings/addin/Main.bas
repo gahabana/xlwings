@@ -294,6 +294,73 @@ DaemonExecFallback:
     #End If
 End Sub
 
+Function GetMacInterpreter() As String
+    ' Shared helper: read interpreter from config (same logic as RunPython lines 47-55).
+    GetMacInterpreter = GetConfig("INTERPRETER_MAC", "")
+    If GetMacInterpreter = "" Then
+        GetMacInterpreter = GetConfig("INTERPRETER", "python")
+    End If
+End Function
+
+Function GetMacPythonPath() As String
+    ' Shared helper: build PYTHONPATH string (same logic as RunPython lines 73-97).
+    ' Extracted to avoid duplication between RunPython, DaemonAutoStart, etc.
+    Dim AddExcelDir As String, ActiveFullName As String, ThisFullName As String
+
+    AddExcelDir = GetConfig("ADD_WORKBOOK_TO_PYTHONPATH", "true")
+    #If Mac Then
+        If InStr(ActiveWorkbook.FullName, "://") = 0 Then
+            ActiveFullName = ToPosixPath(ActiveWorkbook.FullName)
+            ThisFullName = ToPosixPath(ThisWorkbook.FullName)
+        Else
+            ActiveFullName = ActiveWorkbook.FullName
+            ThisFullName = ThisWorkbook.FullName
+        End If
+        GetMacPythonPath = AddExcelDir & ";" & ActiveFullName & ";" & ThisFullName & ";" & GetConfig("ONEDRIVE_CONSUMER_MAC") & ";" & GetConfig("ONEDRIVE_COMMERCIAL_MAC") & ";" & GetConfig("SHAREPOINT_MAC") & ";" & GetConfig("PYTHONPATH")
+    #End If
+End Function
+
+Sub DaemonAutoStart()
+    ' Call from Workbook_Open to auto-start daemon if DAEMON=1.
+    ' Idempotent — safe to call multiple times.
+    #If Mac Then
+    Dim useDaemon As String
+
+    useDaemon = GetConfig("DAEMON", "0")
+    If useDaemon <> "1" And UCase(useDaemon) <> "TRUE" Then
+        Exit Sub
+    End If
+
+    LaunchDaemon GetMacInterpreter(), GetMacPythonPath()
+    #End If
+End Sub
+
+Sub DaemonAutoStop()
+    ' Call from Workbook_BeforeClose to gracefully shut down daemon.
+    #If Mac Then
+    Dim useDaemon As String, interpreter As String, SocketPath As String
+
+    useDaemon = GetConfig("DAEMON", "0")
+    If useDaemon <> "1" And UCase(useDaemon) <> "TRUE" Then
+        Exit Sub
+    End If
+
+    interpreter = GetMacInterpreter()
+    SocketPath = GetDaemonSocketPath(ActiveWorkbook.FullName)
+
+    ' Send SHUTDOWN via daemon_client — fire and forget
+    Dim ParameterString As String
+    ParameterString = interpreter
+    ParameterString = ParameterString + "|" + SocketPath
+    ParameterString = ParameterString + "|SHUTDOWN"
+    ParameterString = ParameterString + "|2"  ' 2 second timeout
+
+    On Error Resume Next
+        AppleScriptTask "xlwings-" & XLWINGS_VERSION & ".applescript", "DaemonExecHandler", ParameterString
+    On Error GoTo 0
+    #End If
+End Sub
+
 Function ExecuteWindows(IsFrozen As Boolean, PythonCommand As String, PYTHON_WIN As String, _
                         Optional PYTHONPATH As String, Optional FrozenArgs As String) As Integer
     ' Call a command window and change to the directory of the Python installation or frozen executable
