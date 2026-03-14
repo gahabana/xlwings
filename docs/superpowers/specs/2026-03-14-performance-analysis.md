@@ -112,6 +112,93 @@ We chose the latter (NumPy required for the fast path) since the user confirmed 
 
 ---
 
+---
+
+## Additional Analysis: Startup Latency and Named Cell I/O
+
+### Question 1: Can the Excel "Run" → Python execution startup be dramatically improved?
+
+**Short answer: Yes — this is likely the single biggest perceived-latency issue, and it's solvable.**
+
+#### What happens when you click "Run"
+
+Every click on "Run" (via xlwings toolbar or macro button) spawns a **new Python process**:
+
+1. **VBA macro fires** (`Main.bas:308-330`) — resolves interpreter path from config
+2. **Shell command constructed** — on Mac via AppleScript (`xlwings-dev.applescript:11-16`), on Windows via `cmd.exe /C` (`Main.bas:380-420`)
+3. **New `python` process starts** — full interpreter cold start
+4. **`import xlwings`** — imports the entire package, initializes engines (`__init__.py:82-120`), imports pywin32/appscript
+5. **`xlwings.utils.prepare_sys_path()`** — parses args, modifies sys.path (`utils.py:438-473`)
+6. **Your script imports** — any `import pandas`, `import numpy`, etc. in your script
+7. **Your code runs**
+
+**Where the time goes (typical breakdown for a ~2-3 second startup):**
+
+| Phase | Time | Notes |
+|-------|------|-------|
+| Process creation + Python interpreter start | ~300-500ms | OS-level, unavoidable per-launch |
+| `import xlwings` + engine init | ~200-500ms | Imports pywin32/appscript, sets up engines |
+| `import numpy` | ~100-200ms | If your script uses it |
+| `import pandas` | ~300-600ms | If your script uses it — pandas is heavy |
+| Your script's other imports | varies | Depends on your dependencies |
+| Actual script execution | fast | The part you care about |
+
+**The fix: persistent Python process (daemon/server mode)**
+
+Instead of spawning a new Python process each click, keep a Python process running in the background that listens for commands from Excel:
+
+- **Option A: xlwings Server (Pro feature)** — xlwings already has a REST API server mode (`xlwings restapi run`) but it's designed for remote/web use, not local RunPython acceleration.
+- **Option B: Custom daemon** — A lightweight background Python process that:
+  1. Starts once (manually or at Excel launch)
+  2. Pre-imports xlwings, numpy, pandas, and your modules
+  3. Listens on a socket/pipe for "run this function" commands from VBA
+  4. Executes and returns results without process startup overhead
+
+This would reduce the per-click latency from **2-3 seconds to ~50-100ms** (just the COM call + function execution). The approach is well-proven — Jupyter kernels work exactly this way.
+
+**Feasibility:** High. The VBA side would need a small change to send a command to the daemon instead of spawning a process. The Python side needs a simple socket listener loop. The xlwings DLL path on Windows (`xlwings64-dev.dll` with `XLPyDLLActivateAuto`) already hints at in-process execution being a known optimization vector.
+
+**Verdict: Dramatic improvement possible (20-50x startup reduction).**
+
+---
+
+### Question 2: Can reading/writing 20-30 Named cells be dramatically improved?
+
+**Short answer: Probably not dramatically — you're already near the floor for this workload.**
+
+#### What happens for each named cell read
+
+```
+sheet["MyNamedCell"].value
+  → 1 COM call: resolve name + get Range object
+  → 1 COM call: read the value
+  → Conversion pipeline (trivial for scalar)
+  → Return Python value
+```
+
+**Per-cell cost:** ~2 COM round-trips × 5-20ms each = **10-40ms per cell** (machine-dependent).
+
+For 25 reads + 10 writes: **~35 cells × ~15ms average = ~500ms total**.
+
+#### Why it's hard to optimize further
+
+- **The bottleneck is COM/appscript latency**, not Python code. Each round-trip crosses the process boundary between Python and Excel. Our fast conversion pipeline doesn't help here — it optimizes what happens *after* data arrives in Python, but for single cells that's already trivial.
+- **Named cells are scattered** — they can't be read in a single rectangular range operation. Each name resolves to a different cell on potentially different sheets.
+- **No batch API** — xlwings (and the underlying COM/appscript APIs) don't offer a "read these 25 named ranges in one call" operation.
+
+#### What could help (modest improvements)
+
+| Approach | Savings | Complexity |
+|----------|---------|------------|
+| **Group reads by sheet** — read all names from Sheet1, then Sheet2, etc. Avoids repeated sheet activation overhead. | ~10-20% | Low |
+| **Read contiguous ranges** — if some named cells are adjacent, read the enclosing range once and index into it. | ~5-15% per group | Low |
+| **VBA-side batch helper** — a VBA function that reads all 25 names into an array and passes it to Python as a single COM call. | ~50-70% | Medium |
+| **Persistent daemon (from Q1)** — if startup is solved, the 500ms for COM calls becomes the total time, which feels fast. | N/A (but feels better) | Medium |
+
+**Verdict: Modest improvements possible (maybe 2x with VBA batching), but not the dramatic 10x+ gains we found in the conversion pipeline. The real win is solving the startup latency from Q1 — once startup drops from 2-3s to 50ms, the 500ms for 35 COM calls becomes the dominant cost, and that's acceptable.**
+
+---
+
 ## Honorable mentions
 
 - **Mac `prepare_xl_data_element`** (`_xlmac.py:95-123`): 13 isinstance branches checked per cell, including guards for `pd` and `np` types even when those libraries aren't involved.
