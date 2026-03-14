@@ -124,6 +124,24 @@ class Engine:
 
     @staticmethod
     def clean_value_data(data, datetime_builder, empty_as, number_builder, err_to_str):
+        import xlwings as xw
+
+        if xw.USE_FAST_CONVERSION:
+            try:
+                from .conversion.fast import fast_clean_value_data
+
+                return fast_clean_value_data(
+                    data,
+                    datetime_builder,
+                    empty_as,
+                    number_builder,
+                    err_to_str,
+                    cell_errors={},  # Mac errors are strings, pass through unchanged
+                    empty_sentinels=("", None, kw.missing_value),
+                )
+            except ImportError:
+                pass
+
         return [
             [
                 _clean_value_data_element(
