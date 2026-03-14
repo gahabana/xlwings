@@ -28,3 +28,35 @@ on SplitString(TheBigString, fieldSeparator)
 	end tell
 	return theItems
 end SplitString
+
+on DaemonLaunchHandler(ParameterString)
+	-- Parameters: PythonInterpreter|WorkbookName|SocketPath|PidFilePath|PythonPath|AppPath
+	set {PythonInterpreter, WorkbookName, SocketPath, PidFilePath, PythonPathArg, AppPath} to SplitString(ParameterString, "|")
+	set ShellCommand to PythonInterpreter & " -m xlwings.daemon start --workbook '" & WorkbookName & "' --socket '" & SocketPath & "' --pidfile '" & PidFilePath & "' --pythonpath '" & PythonPathArg & "' --app '" & AppPath & "' &"
+	try
+		do shell script "source ~/.bash_profile;" & ShellCommand
+	on error errMsg number errNumber
+		try
+			do shell script ShellCommand
+		on error errMsg number errNumber
+			return errMsg
+		end try
+	end try
+	return "OK"
+end DaemonLaunchHandler
+
+on DaemonExecHandler(ParameterString)
+	-- Parameters: PythonInterpreter|SocketPath|PythonCommand|Timeout
+	set {PythonInterpreter, SocketPath, PythonCommand, TimeoutStr} to SplitString(ParameterString, "|")
+	set ShellCommand to PythonInterpreter & " -m xlwings.daemon_client '" & SocketPath & "' --timeout " & TimeoutStr & " 'EXEC " & PythonCommand & "'"
+	try
+		do shell script "source ~/.bash_profile;" & ShellCommand
+		return result
+	on error errMsg number errNumber
+		try
+			return do shell script ShellCommand
+		on error errMsg number errNumber
+			return "ERROR: " & errMsg
+		end try
+	end try
+end DaemonExecHandler
