@@ -466,3 +466,118 @@ class TestFastXlserialToDatetimeSeries:
                 f"Mismatch at index {i}: serial={serials[i]}, "
                 f"fast={result.iloc[i]}, apply={expected.iloc[i]}"
             )
+
+
+class TestEndToEndEquivalence:
+    """Run same data through old and new full pipelines, assert identical results."""
+
+    def _run_read_pipeline(self, data, use_fast, datetime_builder=dt.datetime,
+                           empty_as=None, number_builder=None, err_to_str=False):
+        """Simulate CleanDataFromRead stage."""
+        from xlwings.conversion.fast import fast_clean_value_data
+
+        win_errors = {
+            -2146826281: "#DIV/0!",
+            -2146826246: "#N/A",
+            -2146826259: "#NAME?",
+            -2146826288: "#NULL!",
+            -2146826252: "#NUM!",
+            -2146826265: "#REF!",
+            -2146826273: "#VALUE!",
+        }
+
+        if use_fast:
+            cleaned = fast_clean_value_data(
+                data, datetime_builder, empty_as, number_builder,
+                err_to_str, cell_errors=win_errors, empty_sentinels=("", None),
+            )
+        else:
+            # Inline the Windows _clean_value_data_element logic to avoid
+            # importing xlwings._xlwindows (requires pywintypes on Windows only)
+            def _clean_element(value):
+                if value in ("", None):
+                    return empty_as
+                elif isinstance(value, (dt.datetime, dt.date)):
+                    if datetime_builder is not dt.datetime:
+                        return datetime_builder(
+                            year=value.year, month=value.month, day=value.day,
+                            hour=getattr(value, "hour", 0),
+                            minute=getattr(value, "minute", 0),
+                            second=getattr(value, "second", 0),
+                            microsecond=getattr(value, "microsecond", 0),
+                            tzinfo=None,
+                        )
+                    return value
+                elif number_builder is not None and isinstance(value, float):
+                    return number_builder(value)
+                elif isinstance(value, int) and value in win_errors:
+                    return win_errors[value] if err_to_str else None
+                return value
+
+            cleaned = [[_clean_element(c) for c in row] for row in data]
+
+        return cleaned
+
+    def test_large_mixed_data_read(self):
+        """1000-row mixed-type dataset, old vs new must match."""
+        import random
+        random.seed(42)
+
+        rows = []
+        for _ in range(1000):
+            row = [
+                random.choice(["text", "", None, 3.14, 42, -2146826281,
+                               dt.datetime(2024, 1, 1), True]),
+                random.random() * 100,
+                random.choice(["hello", "", None]),
+            ]
+            rows.append(row)
+
+        old_result = self._run_read_pipeline([r[:] for r in rows], use_fast=False)
+        new_result = self._run_read_pipeline([r[:] for r in rows], use_fast=True)
+        assert old_result == new_result
+
+    def test_large_mixed_data_read_with_number_builder(self):
+        """1000-row dataset with number_builder, old vs new must match."""
+        import random
+        random.seed(123)
+
+        rows = []
+        for _ in range(1000):
+            row = [random.random() * 100, random.choice(["text", "", None])]
+            rows.append(row)
+
+        old_result = self._run_read_pipeline(
+            [r[:] for r in rows], use_fast=False,
+            number_builder=lambda x: int(round(x)),
+        )
+        new_result = self._run_read_pipeline(
+            [r[:] for r in rows], use_fast=True,
+            number_builder=lambda x: int(round(x)),
+        )
+        assert old_result == new_result
+
+    def test_large_mixed_data_write(self):
+        """1000-row write, old vs new must match."""
+        from xlwings.conversion.fast import FastCleanDataForWriteStage
+        from xlwings.conversion.standard import CleanDataForWriteStage
+        import random
+        random.seed(42)
+
+        rows = []
+        for _ in range(1000):
+            row = [
+                random.choice(["text", None, 3.14, np.float64(2.5), np.int64(10),
+                               float("nan"), np.nan, True, False, ""]),
+                random.random() * 100,
+                random.choice(["hello", None, ""]),
+            ]
+            rows.append(row)
+
+        old_ctx = FakeContextWithEngine([r[:] for r in rows])
+        new_ctx = FakeContextWithEngine([r[:] for r in rows])
+
+        CleanDataForWriteStage({})(old_ctx)
+        FastCleanDataForWriteStage({})(new_ctx)
+
+        assert old_ctx.value == new_ctx.value
