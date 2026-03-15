@@ -155,11 +155,13 @@ class DaemonServer:
                 f"--app={self.app_path}",
             ]
 
+            # Use xlwings' own prepare_sys_path to set up sys.path correctly.
+            # This handles extracting parent directories from file paths,
+            # OneDrive/SharePoint URL resolution, etc.
             if self.pythonpath:
-                for path_entry in self.pythonpath.split(";"):
-                    path_entry = path_entry.strip()
-                    if path_entry and path_entry not in sys.path:
-                        sys.path.insert(0, path_entry)
+                from xlwings.utils import prepare_sys_path
+
+                prepare_sys_path(self.pythonpath)
 
             # Remove previously-imported user modules so import picks up changes
             for module_name in list(self._loaded_modules):
