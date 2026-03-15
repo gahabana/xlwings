@@ -252,39 +252,65 @@ End Sub
 
 Sub ExecuteMacDaemon(PythonCommand As String, interpreter As String, PYTHONPATH As String)
     ' Execute a Python command via the running daemon.
+    ' Launches daemon_client in background (to avoid deadlock — the daemon's Python
+    ' code needs to call back into Excel via xw.Book.caller(), which requires Excel
+    ' to be responsive). Polls a result file for completion.
     ' Falls back to normal ExecuteMac if daemon is unreachable after timeout.
     #If Mac Then
     Dim SocketPath As String, ParameterString As String
-    Dim ExecResult As String
+    Dim ResultFile As String, ExecResult As String
+    Dim WaitStart As Double
 
     SocketPath = GetDaemonSocketPath(ActiveWorkbook.FullName)
+    ResultFile = Environ("TMPDIR") & "xlwings-daemon-result-" & Format(Timer, "0") & ".txt"
+
+    ' Delete any stale result file
+    On Error Resume Next
+        Kill ResultFile
+    On Error GoTo 0
 
     ParameterString = interpreter
     ParameterString = ParameterString + "|" + SocketPath
     ParameterString = ParameterString + "|" + PythonCommand
-    ParameterString = ParameterString + "|10"  ' 10 second timeout
+    ParameterString = ParameterString + "|10"
+    ParameterString = ParameterString + "|" + ResultFile
 
     On Error GoTo DaemonExecFallback
-        ExecResult = AppleScriptTask("xlwings-" & XLWINGS_VERSION & ".applescript", "DaemonExecHandler", ParameterString)
+        AppleScriptTask "xlwings-" & XLWINGS_VERSION & ".applescript", "DaemonExecHandler", ParameterString
     On Error GoTo 0
 
-    ' Check if daemon_client returned a timeout error — fall back to normal exec
-    If Left$(ExecResult, 14) = "ERROR: Timeout" Then
-        GoTo DaemonExecFallback
-    End If
+    ' Poll for result file (daemon_client writes it when done)
+    Application.StatusBar = "Running..."
+    WaitStart = Timer
+    Do While Timer - WaitStart < 30
+        If Dir(ResultFile) <> "" Then
+            ' Read result
+            ExecResult = ReadFile(ResultFile)
+            On Error Resume Next
+                Kill ResultFile
+            On Error GoTo 0
 
-    ' Check result for Python errors
-    If Left$(ExecResult, 6) = "ERROR:" Then
-        ' Write error to log file and show via standard ShowError
-        Dim LOG_FILE As String
-        LOG_FILE = Environ("HOME") + "/xlwings.log"
-        Dim f As Integer
-        f = FreeFile
-        Open LOG_FILE For Output As #f
-        Print #f, Mid$(ExecResult, 8)
-        Close #f
-        ShowError (LOG_FILE)
-    End If
+            ' Check for errors
+            If Left$(ExecResult, 6) = "ERROR:" Then
+                Dim LOG_FILE As String
+                LOG_FILE = Environ("HOME") + "/xlwings.log"
+                Dim f As Integer
+                f = FreeFile
+                Open LOG_FILE For Output As #f
+                Print #f, Mid$(ExecResult, 8)
+                Close #f
+                ShowError (LOG_FILE)
+            End If
+            Application.StatusBar = False
+            Exit Sub
+        End If
+        DoEvents
+        Application.Wait Now + TimeValue("00:00:00") + 0.1 / 86400
+    Loop
+
+    ' Timeout — fall back
+    Application.StatusBar = False
+    GoTo DaemonExecFallback
     Exit Sub
 
 DaemonExecFallback:

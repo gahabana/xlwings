@@ -46,17 +46,20 @@ on DaemonLaunchHandler(ParameterString)
 end DaemonLaunchHandler
 
 on DaemonExecHandler(ParameterString)
-	-- Parameters: PythonInterpreter|SocketPath|PythonCommand|Timeout
-	set {PythonInterpreter, SocketPath, PythonCommand, TimeoutStr} to SplitString(ParameterString, "|")
-	set ShellCommand to PythonInterpreter & " -m xlwings.daemon_client '" & SocketPath & "' --timeout " & TimeoutStr & " 'EXEC " & PythonCommand & "'"
+	-- Parameters: PythonInterpreter|SocketPath|PythonCommand|Timeout|ResultFile
+	-- Runs daemon_client in background, writing result to ResultFile.
+	-- This avoids deadlock: Excel stays responsive so the daemon's Python code
+	-- can call back into Excel via xw.Book.caller().
+	set {PythonInterpreter, SocketPath, PythonCommand, TimeoutStr, ResultFile} to SplitString(ParameterString, "|")
+	set ShellCommand to PythonInterpreter & " -m xlwings.daemon_client '" & SocketPath & "' --timeout " & TimeoutStr & " 'EXEC " & PythonCommand & "' > '" & ResultFile & "' 2>&1 &"
 	try
 		do shell script "source ~/.bash_profile;" & ShellCommand
-		return result
 	on error errMsg number errNumber
 		try
-			return do shell script ShellCommand
+			do shell script ShellCommand
 		on error errMsg number errNumber
 			return "ERROR: " & errMsg
 		end try
 	end try
+	return "OK"
 end DaemonExecHandler
