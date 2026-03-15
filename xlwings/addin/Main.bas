@@ -227,37 +227,36 @@ Function GetDaemonPidFilePath(WorkbookFullName As String) As String
 End Function
 
 Sub LaunchDaemon(interpreter As String, PYTHONPATH As String)
-    ' Launch the daemon process in background for the active workbook.
-    ' Called from RunPython on first invocation when DAEMON=1.
+    ' Launch daemon in background using system() C call (non-blocking).
+    ' AppleScriptTask do shell script blocks even with &, so we use system() instead.
     #If Mac Then
     Dim SocketPath As String, PidFilePath As String
-    Dim ParameterString As String, AppPath As String
+    Dim AppPath As String, ShellCmd As String
 
     SocketPath = GetDaemonSocketPath(ActiveWorkbook.FullName)
     PidFilePath = GetDaemonPidFilePath(ActiveWorkbook.FullName)
     AppPath = Left(Application.Path, Len(Application.Path) - 4)
 
-    ParameterString = interpreter
-    ParameterString = ParameterString + "|" + ActiveWorkbook.Name
-    ParameterString = ParameterString + "|" + SocketPath
-    ParameterString = ParameterString + "|" + PidFilePath
-    ParameterString = ParameterString + "|" + PYTHONPATH
-    ParameterString = ParameterString + "|" + AppPath
-
-    On Error Resume Next
-        AppleScriptTask "xlwings-" & XLWINGS_VERSION & ".applescript", "DaemonLaunchHandler", ParameterString
-    On Error GoTo 0
+    ShellCmd = "'" & interpreter & "'" & _
+        " -m xlwings.daemon start" & _
+        " --workbook '" & ActiveWorkbook.Name & "'" & _
+        " --socket '" & SocketPath & "'" & _
+        " --pidfile '" & PidFilePath & "'" & _
+        " --pythonpath '" & PYTHONPATH & "'" & _
+        " --app '" & AppPath & "'" & _
+        " --health-check-interval 2.5" & _
+        " > /dev/null 2>&1 &"
+    system ShellCmd
     #End If
 End Sub
 
 Sub ExecuteMacDaemon(PythonCommand As String, interpreter As String, PYTHONPATH As String)
-    ' Execute a Python command via the running daemon.
-    ' Launches daemon_client in background (to avoid deadlock — the daemon's Python
-    ' code needs to call back into Excel via xw.Book.caller(), which requires Excel
-    ' to be responsive). Polls a result file for completion.
+    ' Execute Python via daemon. Uses system() to launch daemon_client in background
+    ' (non-blocking), writes result to temp file. VBA polls with DoEvents so Excel
+    ' stays responsive for xw.Book.caller() callbacks from the daemon.
     ' Falls back to normal ExecuteMac if daemon is unreachable after timeout.
     #If Mac Then
-    Dim SocketPath As String, ParameterString As String
+    Dim SocketPath As String, ShellCmd As String
     Dim ResultFile As String, ExecResult As String
     Dim WaitStart As Double
 
@@ -269,15 +268,13 @@ Sub ExecuteMacDaemon(PythonCommand As String, interpreter As String, PYTHONPATH 
         Kill ResultFile
     On Error GoTo 0
 
-    ParameterString = interpreter
-    ParameterString = ParameterString + "|" + SocketPath
-    ParameterString = ParameterString + "|" + PythonCommand
-    ParameterString = ParameterString + "|10"
-    ParameterString = ParameterString + "|" + ResultFile
-
-    On Error GoTo DaemonExecFallback
-        AppleScriptTask "xlwings-" & XLWINGS_VERSION & ".applescript", "DaemonExecHandler", ParameterString
-    On Error GoTo 0
+    ShellCmd = "'" & interpreter & "'" & _
+        " -m xlwings.daemon_client" & _
+        " '" & SocketPath & "'" & _
+        " --timeout 10" & _
+        " 'EXEC " & PythonCommand & "'" & _
+        " > '" & ResultFile & "' 2>&1"
+    system ShellCmd
 
     ' Poll for result file (daemon_client writes it when done)
     Application.StatusBar = "Running..."
@@ -308,14 +305,8 @@ Sub ExecuteMacDaemon(PythonCommand As String, interpreter As String, PYTHONPATH 
         Application.Wait Now + TimeValue("00:00:00") + 0.1 / 86400
     Loop
 
-    ' Timeout — fall back
+    ' Timeout — fall back to normal process spawn
     Application.StatusBar = False
-    GoTo DaemonExecFallback
-    Exit Sub
-
-DaemonExecFallback:
-    ' Daemon unreachable — fall back to normal process spawn
-    On Error GoTo 0
     ExecuteMac PythonCommand, interpreter, PYTHONPATH
     #End If
 End Sub
