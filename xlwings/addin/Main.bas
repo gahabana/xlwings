@@ -204,26 +204,26 @@ AppleScriptErrorHandler:
     #End If
 End Sub
 
-Function GetDaemonSocketPath(WorkbookFullName As String) As String
-    ' Generate a deterministic socket path from the workbook's full path.
-    ' Uses a simple hash to avoid path-length issues with $TMPDIR.
-    Dim hashValue As Long
+Function GetDaemonHash(WorkbookFullName As String) As String
+    ' Generate a deterministic hash string from the workbook path.
+    ' Uses Double to avoid VBA Long overflow on multiplication.
+    Dim hashValue As Double
     Dim i As Integer
     hashValue = 0
     For i = 1 To Len(WorkbookFullName)
-        hashValue = ((hashValue * 31) + Asc(Mid$(WorkbookFullName, i, 1))) And &H7FFFFFFF
+        hashValue = hashValue * 31 + Asc(Mid$(WorkbookFullName, i, 1))
+        ' Keep within manageable range using Mod (equivalent to & 0x7FFFFFFF)
+        hashValue = hashValue - Fix(hashValue / 2147483648#) * 2147483648#
     Next i
-    GetDaemonSocketPath = Environ("TMPDIR") & "xlwings-daemon-" & CStr(hashValue) & ".sock"
+    GetDaemonHash = CStr(CLng(hashValue))
+End Function
+
+Function GetDaemonSocketPath(WorkbookFullName As String) As String
+    GetDaemonSocketPath = Environ("TMPDIR") & "xlwings-daemon-" & GetDaemonHash(WorkbookFullName) & ".sock"
 End Function
 
 Function GetDaemonPidFilePath(WorkbookFullName As String) As String
-    Dim hashValue As Long
-    Dim i As Integer
-    hashValue = 0
-    For i = 1 To Len(WorkbookFullName)
-        hashValue = ((hashValue * 31) + Asc(Mid$(WorkbookFullName, i, 1))) And &H7FFFFFFF
-    Next i
-    GetDaemonPidFilePath = Environ("TMPDIR") & "xlwings-daemon-" & CStr(hashValue) & ".pid"
+    GetDaemonPidFilePath = Environ("TMPDIR") & "xlwings-daemon-" & GetDaemonHash(WorkbookFullName) & ".pid"
 End Function
 
 Sub LaunchDaemon(interpreter As String, PYTHONPATH As String)
